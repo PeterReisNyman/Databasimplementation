@@ -1,300 +1,103 @@
-Wishlist Application Report
+Implementing Deadline Scheduling in MINIX
 
-Introduction
+Background and the Original Scheduling
 
-This report details the implementation of a web application that manages children’s wishlists. The application interacts with a relational database using PHP and PDO with prepared statements. It allows users to add new wishlists, view and evaluate existing wishlists, deliver wishlists, and calculate the average kindness level per year. Each implemented feature is discussed with corresponding code examples and explanations.
+In the MINIX operating system, the scheduler plays a crucial role in managing how processes are given access to the CPU. The original scheduling algorithm in MINIX is a priority-based, time-sharing scheduler. Each process is assigned a static priority level and a time quantum. The scheduler selects the highest-priority process that is ready to run, allocating CPU time based on these priorities.
 
-Link to Working Web Page
+Processes consume their allotted time quantum and may be preempted if a higher-priority process becomes ready to run. This mechanism ensures a fair distribution of CPU time among processes but does not account for time-critical tasks that require meeting specific deadlines. Consequently, processes with urgent timing constraints may not receive CPU time promptly, leading to missed deadlines.
 
-[HAVE DONE] (Note: The working web page is uploaded on the school’s web server as required.)
+Understanding the limitations of the original scheduler is essential to appreciate the modifications introduced. The key aspect is that the original scheduler lacks the ability to handle deadlines or adjust scheduling decisions based on timing requirements.
 
-Form with Free Text Fields to Add Data to Tables
+Aim
 
-Implementation
+The goal of this project is to modify the MINIX scheduler to support deadline scheduling. By allowing processes to specify deadlines, the scheduler can prioritize them appropriately to increase the likelihood of meeting their timing constraints. The project aims to implement this functionality, test it under various system loads, and evaluate its effectiveness in ensuring that time-critical processes meet their deadlines.
 
-The feature is implemented in the add_data.php file. It presents a form where users can input the Social Security Number (SSN) of a child and specify the number of toys to add to the wishlist.
+Approach: The Modified Scheduler and the Test Program
 
-Figure 1: Form with Free Text Fields in add_data.php
+Modifications to the Scheduler
 
-<form action="add_data.php" method="post">
-    <h3><label>SSN:</label>
-        <input type="text" name="ssn" value="201101-1234" required><br>
-    </label></h3>
+To introduce deadline scheduling, we implemented a new system call setdl(int ticks). This system call enables a process to set a deadline by specifying the number of ticks (system time units) until its deadline. The implementation involved several steps:
 
-    <label>Number of toys:</label>
-        <input type="number" name="number" value="1" required><br><br>
-    </label>
-    <input type="submit" value="Continue">
-</form>
+	1.	System Call Definition: Added SETDL to the system call numbers in /usr/src/include/minix/callnr.h.
+	2.	Process Manager Updates:
+	•	Declared the system call handler do_setdl in /usr/src/servers/pm/proto.h and /usr/src/servers/pm/callnr.h.
+	•	Added do_setdl to the system call table in /usr/src/servers/pm/table.c.
+	•	Implemented the handler in /usr/src/servers/pm/misc.c, which passes the deadline value to the kernel.
+	3.	Kernel-Level Support:
+	•	Added SYS_SETDL to /usr/src/include/minix/com.h and incremented NR_SYS_CALLS.
+	•	Implemented sys_setdl in /usr/src/lib/syslib/sys_setdl.c, which constructs a message with the process endpoint and deadline.
+	•	Declared sys_setdl in /usr/src/include/minix/syslib.h.
+	•	Mapped SYS_SETDL to do_setdl in /usr/src/kernel/system.c and updated the system call handler table.
+	•	Implemented do_setdl in /usr/src/kernel/system/do_setdl.c, which updates the p_deadline field in the process’s kernel structure.
+	4.	Scheduler Adjustment:
+	•	Modified the scheduler in /usr/src/kernel/proc.c by adding a condition to check if a process has a deadline:
 
-Explanation
-
-	•	SSN Field: A text input field where the user enters the child’s SSN.
-	•	Number of Toys Field: A number input field where the user specifies how many toys they wish to add.
-	•	Both fields are marked as required to ensure the form is submitted with complete information.
-
-Dropdown Generated from Data in the Database
-
-Implementation
-
-After the user submits the initial form, add_data.php generates dropdown menus populated with toy names fetched from the database.
-
-Figure 2: Generating Dropdown Menus in add_data.php
-
-$pdo = new PDO('mysql:host=localhost;dbname=a23petny', $_SESSION['username'], $_SESSION['password']);
-
-$stmt = $pdo->prepare("SELECT namn FROM leksak");
-$stmt->execute();
-$result = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-for ($i = 1; $i < $_POST["number"]+1; $i++) {
-    echo "<label>Toy {$i}:
-        <select name='decision{$i}' required>
-            <option value=''>--Select--</option>";
-    foreach ($result as $row) {
-        echo "<option value='{$row["namn"]}'>{$row["namn"]}</option>\n";
-    }
-    echo "</select>
-    </label><br>";
+if (rp->p_deadline > 0) {
+    rp->p_priority = DEADLINE_PRIORITY;
 }
 
-Explanation
+Here, DEADLINE_PRIORITY is set to a high-priority level to ensure that processes with deadlines are scheduled before others.
 
-	•	Database Connection: Establishes a connection to the database using PDO.
-	•	Fetching Data: Retrieves all toy names from the leksak table.
-	•	Generating Dropdowns: For each toy number specified, a dropdown menu is created with options populated from the database.
-	•	Looping: Uses a for loop to generate the required number of dropdowns based on user input.
+Rationale for the Modifications
 
-Search in the Database with Free Text Search
+By introducing the setdl system call and adjusting process priorities based on deadlines, we expect processes with time constraints to receive CPU time more promptly. Elevating their priority increases the scheduler’s likelihood of selecting them over non-critical processes, thus enhancing their chances of meeting deadlines.
 
-Implementation
+Test Program Description
 
-Implemented in avg_kindness.php, this feature allows users to input a year and retrieve the average kindness level of children born that year.
+The test program, deadline, simulates a time-critical task. Its main function performs the following steps:
 
-Figure 3: Search Form in avg_kindness.php
+	1.	Set Deadline: Calls setdl(ticks) to specify its deadline.
+	2.	Execution Loop: Enters a loop where it performs computations or sleeps to simulate work.
+	3.	Deadline Checking: At each iteration, checks if the current time has exceeded the deadline.
+	•	If the deadline is missed, it reports a missed deadline and terminates.
+	•	If the deadline is met, it continues execution.
 
-<form action="avg_kindness.php" method="get">
-    <label>Year: 
-        <input type='text' name="year">
-    </label>
-    <input type='submit' value='Get Data'>
-</form>
+By running multiple instances of this program concurrently, we can create system load and observe how the scheduler handles scheduling processes with deadlines under different conditions.
 
-Figure 4: Executing Stored Procedure in avg_kindness.php
+Results
 
-if (isset($_GET["year"])) {
-    $pdo = new PDO('mysql:host=localhost;dbname=a23petny', $_SESSION['username'], $_SESSION['password']);
-    $stmt = $pdo->prepare("CALL GetAvgSnällhetForYear(:year);");
-    $stmt->execute([':year' => $_GET['year']]);
-    
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($result) {
-        echo 'For the year ' . $_GET['year'] . ' the average kindness was ' . $result['AvgSnällhetNivå'];
-    } else {
-        echo 'No information for the year ' . $_GET['year'];
-    }
-}
+Testing Scenarios
 
-Explanation
+We conducted tests under various scenarios to compare the performance of the original scheduler and the modified scheduler with deadline support.
 
-	•	Form Submission: The user inputs a year, and upon submission, the form sends a GET request.
-	•	Stored Procedure Call: The PHP script checks if a year is set and calls the GetAvgSnällhetForYear stored procedure with the input year.
-	•	Displaying Results: Fetches the result and displays the average kindness level or a message if no data is available.
+	1.	Baseline Test:
+	•	Setup: Ran four instances of the deadline program with deadlines of 3 seconds.
+	•	Original Scheduler: All instances missed their deadlines consistently.
+	•	Modified Scheduler: All instances successfully met 100 successive deadlines.
+	2.	Increased Load Test:
+	•	Setup: Ran six instances of the deadline program with deadlines of 15 ticks.
+	•	Modified Scheduler: Some instances missed their deadlines due to higher system load.
 
-Change to the Contents of the Database Using UPDATE
+Observations
 
-Implementation
+	•	Original Scheduler: Lacked the ability to prioritize deadline processes, resulting in missed deadlines even under moderate load.
+	•	Modified Scheduler: Improved deadline adherence significantly by elevating the priority of processes with deadlines.
+	•	System Limitations: Under heavy load, the modified scheduler could not prevent all deadline misses, indicating resource limitations.
 
-Users can approve or reject wishlists in view_wishlists.php, which updates the database accordingly.
+Data Summary
 
-Figure 5: Updating Database in view_wishlists.php
+Number of Instances	Deadline (ticks)	Scheduler	Deadlines Met	Deadlines Missed
+4	3 seconds	Original	0	All
+4	3 seconds	Modified	All	0
+6	15 ticks	Modified	Majority	Some
 
-if (isset($_POST['decision'])) {
-    if ($_POST['decision'] == 'approved') {
-        $stmt = $pdo->prepare("UPDATE önskelista SET medgiven = 2 WHERE ssn = :ssn AND årtal = :year");
-    } elseif ($_POST['decision'] == 'rejected') {
-        $stmt = $pdo->prepare("UPDATE önskelista SET medgiven = 0 WHERE ssn = :ssn AND årtal = :year");
-    }
-    $stmt->execute([
-        ':ssn' => $_POST['ssn'],
-        ':year' => date('Y')
-    ]);
-}
+Discussion
 
-Explanation
+The project successfully implemented deadline scheduling in the MINIX scheduler. The introduction of the setdl system call and priority adjustments allowed processes to specify deadlines and be scheduled preferentially. The results demonstrate that the modified scheduler effectively improves the ability of time-critical processes to meet their deadlines under normal system loads.
 
-	•	Decision Handling: Checks the user’s decision from the form submission.
-	•	Updating önskelista Table: Uses an UPDATE statement to set the medgiven status based on the decision.
-	•	2 represents an approved wishlist.
-	•	0 represents a rejected wishlist.
-	•	Execution: Prepares and executes the SQL statement with bound parameters to prevent SQL injection.
+The observations align with our expectations:
 
-Execute a Procedure from the Database
+	•	Improved Deadline Adherence: Processes with deadlines received higher priority, leading to better scheduling and deadline fulfillment.
+	•	Resource Constraints: Under heavy load, the system’s finite resources limited the scheduler’s ability to meet all deadlines, highlighting that priority adjustments alone cannot overcome physical limitations.
 
-Implementation
+Reflections and Improvements
 
-The avg_kindness.php page calls a stored procedure to retrieve data.
+While the modifications enhanced deadline handling, several areas for improvement remain:
 
-Figure 6: Calling Stored Procedure in avg_kindness.php
-
-$stmt = $pdo->prepare("CALL GetAvgSnällhetForYear(:year);");
-$stmt->execute([':year' => $_GET['year']]);
-
-Explanation
-
-	•	Stored Procedure: GetAvgSnällhetForYear calculates the average kindness level for a given year.
-	•	Parameter Binding: The year input by the user is bound to the procedure call.
-	•	Result Handling: The result is fetched and displayed to the user.
-
-Display the Contents from Two Different Database Tables
-
-Implementation
-
-In delivered.php, the contents of önskelista and leveradÖnskelista tables are displayed.
-
-Figure 7: Displaying Undelivered Wishlists in delivered.php
-
-foreach ($pdo->query("SELECT * FROM önskelista") as $row) {
-    // Display undelivered wishlist details
-}
-
-Figure 8: Displaying Delivered Wishlists in delivered.php
-
-foreach ($pdo->query("SELECT * FROM leveradÖnskelista") as $row) {
-    // Display delivered wishlist details
-}
-
-Explanation
-
-	•	Undelivered Wishlists: Retrieved from the önskelista table.
-	•	Delivered Wishlists: Retrieved from the leveradÖnskelista table.
-	•	Separation: Wishlists are categorized and displayed under appropriate headings.
-
-Generate Links Based on Database Content
-
-Implementation
-
-Links are generated in delivered.php, allowing users to mark wishlists as delivered.
-
-Figure 9: Generating Links in delivered.php
-
-echo "<li><a href='delivered.php?ssn={$row['ssn']}&årtal={$row['årtal']}'>
-    wishlist by {$namn}, ssn: {$row['ssn']}, Year: {$row['årtal']}, Responsible: {$row['ansvarigHandläggare']}
-</a></li>";
-
-Figure 10: Executing Procedure on Link Click in delivered.php
-
-if (isset($_GET["ssn"])) {
-    $stmt = $pdo->prepare("CALL levererad(:ssn, :year)");
-    $stmt->execute([
-        ':ssn' => $_GET['ssn'],
-        ':year' => $_GET["årtal"]
-    ]);
-}
-
-Explanation
-
-	•	Link Generation: Each wishlist is a clickable link that includes the child’s SSN and year.
-	•	Procedure Execution: Upon clicking the link, the levererad stored procedure is called to move the wishlist to the delivered table.
-	•	Database Update: The procedure handles data movement and deletion as required.
-
-VG: Implement a Login that Checks Credentials Against the Database
-
-Implementation
-
-A login system is implemented using login.php and login_check.php.
-
-Figure 11: Login Form in login.php
-
-<form action="login_check.php" method="post">
-    <label>Username:</label>
-        <input type="text" name="username" value="root" required><br><br>
-    </label>
-
-    <label>Password:
-        <input type="password" name="password" value="new_password" required><br><br>
-    </label>
-    <input type="submit" value="Login">
-</form>
-
-Figure 12: Login Verification in login_check.php
-
-try {
-    $pdo = new PDO('mysql:host=localhost;dbname=a23petny', $_POST['username'], $_POST['password']);
-    if (isset($_POST['username'])) {
-        $_SESSION["username"] = $_POST['username'];
-    }
-    if (isset($_POST['password'])) {
-        $_SESSION["password"] = $_POST['password'];
-    }
-    header('Location: main_menu.php');
-} catch (PDOException $e) {
-    echo "<br><br>" . $e->getMessage();
-}
-
-Explanation
-
-	•	Login Form: Collects username and password from the user.
-	•	Session Handling: Stores credentials in the session upon successful login.
-	•	Database Connection: Attempts to connect to the database using provided credentials.
-	•	Error Handling: Catches exceptions and displays an error message if login fails.
-
-VG: Implement a Procedure That Receives a Parameter via the Interface
-
-Implementation
-
-The GetAvgSnällhetForYear stored procedure receives a year parameter from user input.
-
-Figure 13: Stored Procedure Call in avg_kindness.php
-
-$stmt = $pdo->prepare("CALL GetAvgSnällhetForYear(:year);");
-$stmt->execute([':year' => $_GET['year']]);
-
-Explanation
-
-	•	User Input: The year is entered by the user in a text field.
-	•	Parameter Passing: The input year is passed as a parameter to the stored procedure.
-	•	Procedure Execution: Retrieves the average kindness level for the specified year.
-
-VG: Create a Form That Uses Hidden Fields
-
-Implementation
-
-Hidden fields are used in add_data.php to pass data between form submissions.
-
-Figure 14: Hidden Fields in add_data.php
-
-<input type="hidden" name="ssn" value="<?php echo isset($_POST["ssn"]) ? $_POST["ssn"] : ''; ?>">
-<input type="hidden" name="number" value="<?php echo isset($_POST["number"]) ? $_POST["number"] : ''; ?>">
-
-Explanation
-
-	•	Data Preservation: Keeps the SSN and number of toys across multiple form submissions.
-	•	Multi-step Form: Facilitates a form that progresses in steps, retaining necessary data.
-	•	Conditional Value: Checks if the POST variables are set before assigning them.
+	•	Advanced Scheduling Algorithms: Implementing real-time scheduling algorithms like Earliest Deadline First (EDF) could further optimize deadline adherence by dynamically scheduling processes based on the urgency of their deadlines.
+	•	Admission Control: Introducing mechanisms to limit the number of deadline processes admitted to the system could prevent overload and ensure that accepted tasks have sufficient resources.
+	•	Fine-Grained Priority Levels: Adjusting priorities based on how close a process is to its deadline could make scheduling decisions more responsive to timing constraints.
 
 Conclusion
 
-The application fulfills all the required functionalities, including:
-
-	•	Adding data through forms with free text fields.
-	•	Generating dropdowns from database data.
-	•	Searching the database using user input.
-	•	Updating and deleting database content.
-	•	Executing stored procedures.
-	•	Displaying data from multiple tables.
-	•	Generating dynamic links that trigger database changes.
-
-Additional VG (Very Good) requirements met include:
-
-	•	Implementing a secure login system using PHP sessions.
-	•	Executing stored procedures with parameters supplied via the interface.
-	•	Using hidden fields in forms to handle multi-step data submission.
-
-References
-
-	•	PHP PDO Documentation: PHP Manual - PDO
-	•	MySQL Stored Procedures: MySQL Documentation - Stored Procedures
-	•	HTML Forms: MDN Web Docs - HTML Forms
-
-Note: All code examples are presented in monospace font with proper indentation for readability. Each code snippet is labeled as a numbered figure for reference.
+The modified scheduler achieved the project’s aim by providing basic deadline scheduling capabilities. Processes can now set deadlines and are given higher priority accordingly. While the scheduler performs well under normal conditions, heavy system loads still pose challenges. Future enhancements could build upon this foundation to create a more robust real-time scheduling system.
